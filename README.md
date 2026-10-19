@@ -34,6 +34,45 @@ The `hooks/` code draws the band above the prompt. It runs inside Claude Code.
 `create_item`, `add_comment`, `add_labels`, `remove_labels`, `close_item`,
 `reopen_item`, `set_field_value`, `start_work`, `finish_work`.
 
+## What the prompt band does
+
+The band is a Claude Code mod in `hooks/`. Everything it runs or reads is
+listed here.
+
+Programs it runs, each with fixed arguments:
+
+- `sh -c 'echo $HOME'`, to find your home folder.
+- `defaults read -g AppleInterfaceStyle`, to match the band to macOS dark or
+  light mode.
+- `git remote get-url origin`, to learn which GitHub repo the session is in, so
+  `#N` resolves to that repo's item.
+- `sh -c 'curl -fsSL --max-time 5 -- "$1" | base64'` with one `https://` URL,
+  to fetch an assignee's avatar picture from `avatars.githubusercontent.com`.
+  The picture is shown in the band and cached. Nothing is sent except the
+  request for that picture. The script never runs what it downloads.
+- `open gitsu://item/<project>/<item>`, when you press Open Gitsu.
+
+Files it reads:
+
+- `~/Library/Application Support/Claude/config.json`, for the Claude theme.
+- `~/Library/Application Support/co.coduo.gitsu/cache/mcp-snapshot.json`, the
+  board snapshot the Gitsu app writes, to describe the items you mention.
+
+Tool calls it makes without the model asking:
+
+- When a session ends, it calls the Gitsu MCP tool `finish_work` for each item
+  Claude started work on in that session, so the item does not stay marked as
+  in progress.
+
+What it reads from the conversation: the numbers you write as `#N` in a prompt,
+to look them up in the local snapshot. The prompt text is not sent anywhere.
+
+## Credentials
+
+The plugin itself reads no credential. The Gitsu app's own `gitsu-mcp` binary
+reads the GitHub token that Gitsu stored in your keychain when you signed in,
+and uses it only for calls to `api.github.com`.
+
 ## What leaves your machine
 
 - The Gitsu app talks to the GitHub API with the token it already holds.
@@ -51,4 +90,4 @@ hello@coduo.co
 
 License: MIT. See LICENSE.
 
-Exported from source commit 49bc6506efb8255a790771d60979646df5c6a2bf.
+Exported from source commit 16a8c722082e6f1a2eece346e5b4f894502398d5.
