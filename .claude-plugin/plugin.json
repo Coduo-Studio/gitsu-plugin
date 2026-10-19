@@ -1,8 +1,16 @@
 {
   "name": "gitsu",
   "version": "0.3.0",
-  "author": { "name": "Coduo" },
+  "author": {
+    "name": "Coduo"
+  },
   "description": "Gitsu inside Claude Code: the board tools (list, read and update items) over MCP, plus a band above the prompt showing the items Claude is working on and any #N you mention, each with an Open Gitsu button.",
   "types": "./types/index.d.ts",
-  "icon": "./icon.png"
+  "icon": "./icon.png",
+  "homepage": "https://gitsu.app",
+  "repository": "https://github.com/Coduo-Studio/gitsu-plugin",
+  "documentationUrl": "https://github.com/Coduo-Studio/gitsu-plugin#readme",
+  "supportUrl": "https://github.com/Coduo-Studio/gitsu-plugin/issues",
+  "privacyPolicyUrl": "https://gitsu.app/privacy",
+  "termsOfServiceUrl": "https://gitsu.app/terms"
 }
