@@ -1,0 +1,20 @@
+#!/bin/sh
+# Launcher for the Gitsu MCP server. Finds the installed Gitsu.app and replaces
+# this process with the app's own sidecar: the relay checks the peer's real
+# executable path and the keychain trusts only that sibling binary.
+BUNDLE_ID="co.coduo.gitsu"
+APP=""
+for dir in $(mdfind "kMDItemCFBundleIdentifier == $BUNDLE_ID" 2>/dev/null | tr ' ' '\001'); do
+  dir=$(printf '%s' "$dir" | tr '\001' ' ')
+  if [ -x "$dir/Contents/MacOS/gitsu-mcp" ]; then APP=$dir; break; fi
+done
+if [ -z "$APP" ]; then
+  for dir in /Applications/Gitsu.app "$HOME/Applications/Gitsu.app"; do
+    if [ -x "$dir/Contents/MacOS/gitsu-mcp" ]; then APP=$dir; break; fi
+  done
+fi
+if [ -z "$APP" ]; then
+  echo "Gitsu is not installed. Install it from https://gitsu.app, then reload plugins." >&2
+  exit 1
+fi
+exec "$APP/Contents/MacOS/gitsu-mcp" "$@"

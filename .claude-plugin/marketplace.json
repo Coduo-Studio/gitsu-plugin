@@ -1,0 +1,12 @@
+{
+  "name": "gitsu",
+  "owner": { "name": "Coduo" },
+  "metadata": { "description": "Gitsu's Claude Code plugin." },
+  "plugins": [
+    {
+      "name": "gitsu",
+      "source": "./",
+      "description": "Gitsu inside Claude Code: board tools over MCP, plus the items Claude is working on above the prompt."
+    }
+  ]
+}

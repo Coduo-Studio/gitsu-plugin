@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "gitsu": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/gitsu-mcp",
+      "args": ["--stdio"]
+    }
+  }
+}
