@@ -6,8 +6,6 @@ type SnapItem = {
   // label name -> hex colour, as Gitsu's cache has it (src/services/mcp-snapshot.ts)
   label_colors?: Record<string, string>
   assignees?: string[]
-  // assignee login -> avatar URL, where Gitsu's read carried one
-  avatars?: Record<string, string>
   repo?: string
   title?: string
   fields?: Record<string, unknown>
@@ -44,7 +42,6 @@ export type FoundItem = {
   labels: string[]
   labelColors: Record<string, string>
   assignees: string[]
-  avatars: Record<string, string>
   repo?: string
   boardTitle: string
   projectId: string
@@ -88,7 +85,6 @@ export const findItems = (
       labels: hit.item.labels ?? [],
       labelColors: hit.item.label_colors ?? {},
       assignees: hit.item.assignees ?? [],
-      avatars: hit.item.avatars ?? {},
       repo: hit.item.repo?.toLowerCase(),
       boardTitle: hit.board.title ?? 'board',
       projectId: hit.id,
@@ -251,8 +247,8 @@ export const repoFromRemote = (url: string) =>
     ?.toLowerCase()
 
 // the list row's label chips (LabelChip: outline pill, 10px dot in the label's colour, 12px
-// medium text, max-w-24) then the assignee (AssigneeAvatar, 20px circle: their photo when
-// `photo` carries it as a data: URI, their initials until then); one Svg per row
+// medium text, max-w-24) then the assignee (AssigneeAvatar, 20px circle with their
+// initials); one Svg per row
 const MAX_CHIPS = 3
 const CHIP_STYLE = (dark: boolean) =>
   dark
@@ -279,8 +275,7 @@ export const chipsSvg = (
   labels: string[],
   colors: Record<string, string>,
   assignee?: string,
-  dark = false,
-  photo?: string
+  dark = false
 ) => {
   const H = 24
   const parts: string[] = []
@@ -316,14 +311,7 @@ export const chipsSvg = (
   if (assignee) {
     if (parts.length) x += 2
     const cx = x + 10
-    // the photo clipped to the circle, over the brand fill a transparent photo shows through;
-    // initials from the login while there is none
-    // a clip id of this row's own (login and x): drawings that share one page never borrow
-    // another row's circle
-    const clip = `avatar-${assignee.replace(/[^\w-]/g, '_')}-${Math.round(cx * 10)}`
-    const face = photo
-      ? `<clipPath id="${clip}"><circle cx="${cx}" cy="${H / 2}" r="10"/></clipPath><circle class="a" cx="${cx}" cy="${H / 2}" r="10"/><image href="${xml(photo)}" x="${cx - 10}" y="${H / 2 - 10}" width="20" height="20" preserveAspectRatio="xMidYMid slice" clip-path="url(#${clip})"/>`
-      : `<circle class="a" cx="${cx}" cy="${H / 2}" r="10"/><text class="i" x="${cx}" y="${H / 2 + 3}" text-anchor="middle" ${FONT.replace('"12"', '"9"')}>${xml(assignee.slice(0, 2).toUpperCase())}</text>`
+    const face = `<circle class="a" cx="${cx}" cy="${H / 2}" r="10"/><text class="i" x="${cx}" y="${H / 2 + 3}" text-anchor="middle" ${FONT.replace('"12"', '"9"')}>${xml(assignee.slice(0, 2).toUpperCase())}</text>`
     parts.push(
       `<g><title>${xml(`Assigned to ${assignee}`)}</title>${face}<circle cx="${cx}" cy="${H / 2}" r="9.75" fill="none" class="p" style="fill:none"/></g>`
     )

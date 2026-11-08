@@ -20,8 +20,6 @@ export type MentionedItem = {
   // label name -> hex colour, from the snapshot
   labelColors: Record<string, string>
   assignees: string[]
-  // assignee login -> avatar URL, from the snapshot; absent on a row kept from an older build
-  avatars?: Record<string, string>
   repo?: string
   boardTitle: string
   projectId: string
@@ -38,10 +36,8 @@ declare module 'claude-code' {
       // claimed rows the person hid with ✕: `${keyOf(w)}@${startedAt}`, so a new start_work shows
       // the item again; only the claimed list's own keys are kept (bounded by the claimed count)
       hidden: string[]
-      // the Claude app's resolved theme, so the drawings carry explicit colours
+      // Claude Code's resolved theme, so the drawings carry explicit colours
       isDark: boolean
-      // assignee login -> their photo as a data: URI, once loaded (hooks/avatars.ts)
-      avatars: Record<string, string>
     }
   }
 }

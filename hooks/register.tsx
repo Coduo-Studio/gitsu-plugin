@@ -1,20 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Hook, Register } from 'claude-code'
 
 import type { MentionedItem, WorkItem } from '../types'
-import type { AvatarEntry } from './avatars'
-import {
-  AVATAR_FETCH,
-  avatarDataUri,
-  avatarKey,
-  FRESH_MS,
-  fromCache,
-  isAvatarKey,
-  MAX_CACHED,
-  photoBase64,
-  RETRY_MS,
-  sizedAvatarUrl,
-} from './avatars'
 import type { Snapshot } from './prompt-items'
 import {
   chipsSvg,
@@ -33,15 +20,15 @@ import {
 
 // the server name is the person's own config: Gitsu writes `gitsu` (the dev build `gitsu-dev`);
 // `gitsu-mcp` and `gitsu-mcp-dev` are the names before the 2026-10-03 rename (#1014), still matched
-const SERVERS = ['gitsu', 'gitsu-dev', 'gitsu-mcp', 'gitsu-mcp-dev'] as const
 const DEV_SERVERS: ReadonlySet<string> = new Set(['gitsu-dev', 'gitsu-mcp-dev'])
 const DEFAULT_SERVER = 'gitsu'
+// mcp__<server>__<tool>: the server a hook's tool name spells
+const serverOf = (tool: string) => tool.split('__')[1] ?? DEFAULT_SERVER
 const claimed = atom({ plugin: 'gitsu', key: 'claimed' } as const, [])
 const mentioned = atom({ plugin: 'gitsu', key: 'mentioned' } as const, [])
 const tick = atom({ plugin: 'gitsu', key: 'tick' } as const, 0)
 const isDark = atom({ plugin: 'gitsu', key: 'isDark' } as const, false)
 const hidden = atom({ plugin: 'gitsu', key: 'hidden' } as const, [])
-const avatars = atom({ plugin: 'gitsu', key: 'avatars' } as const, {})
 
 // the band's own colours: Gitsu's brand fill, the hover card's background, the mark's ink
 const COLORS = {
@@ -120,21 +107,16 @@ const showStatus = async ($: EngineInterface) => {
   )
 }
 
-// the Claude app's theme: config.json userThemeMode, and for `system` (or no answer) macOS's
+// Claude Code's theme (/config `theme`), and for auto (or no answer) macOS's
 // AppleInterfaceStyle, which `defaults` prints as Dark and exits non-zero for light
 const refreshTheme = async ($: EngineInterface) => {
-  const home = (await $.process.run(['sh', '-c', 'echo $HOME'])).stdout.trim()
-  let mode: unknown
-  try {
-    const cfg = await $.fs.read(
-      `${home}/Library/Application Support/Claude/config.json`
-    )
-    mode = (JSON.parse(cfg) as Raw).userThemeMode
-  } catch {
-    mode = undefined
-  }
-  let dark = mode === 'dark'
-  if (mode !== 'dark' && mode !== 'light') {
+  const row = await $.config
+    .list()
+    .then(rows => rows.find(r => r.key === 'theme'))
+    .catch(() => undefined)
+  const mode = typeof row?.value === 'string' ? row.value : ''
+  let dark = mode.includes('dark')
+  if (!dark && !mode.includes('light')) {
     const r = await $.process
       .run(['defaults', 'read', '-g', 'AppleInterfaceStyle'])
       .catch(() => undefined)
@@ -177,8 +159,7 @@ const lookUp = async (
   }
   return { lines: [] as string[], found: [] as MentionedItem[] }
 }
-const homeOf = async ($: EngineInterface) =>
-  (await $.process.run(['sh', '-c', 'echo $HOME'])).stdout.trim()
+const homeOf = async ($: EngineInterface) => (await $.env.get('HOME')) ?? ''
 
 // a claim's own item: read only its server's snapshot (dev or release), only the board it named,
 // and accept a hit only in its repo. Never the open board's same-numbered item from elsewhere,
@@ -234,80 +215,6 @@ const fillClaimed = async (
   )
 }
 
-// drops the oldest photos past MAX_CACHED
-const pruneAvatars = async ($: EngineInterface) => {
-  const keys = (await $.store.keys()).filter(isAvatarKey)
-  if (keys.length <= MAX_CACHED) return
-  const aged: { k: string; at: number }[] = []
-  for (const k of keys)
-    aged.push({
-      k,
-      at: ((await $.store.get(k)) as AvatarEntry | undefined)?.at ?? 0,
-    })
-  aged.sort((x, y) => x.at - y.at)
-  for (const { k } of aged.slice(0, keys.length - MAX_CACHED))
-    await $.store.delete(k)
-}
-// one fetch per login at a time, across every row and timer of this module
-const inFlight = new Set<string>()
-// the login's photo as a data: URI: from the cache, else fetched and cached; undefined while there
-// is none (no URL, no network, still failing), so the row keeps its initials
-const loadAvatar = async (
-  $: EngineInterface,
-  login: string,
-  avatarUrl: string | undefined
-) => {
-  const url = sizedAvatarUrl(avatarUrl)
-  if (!url || inFlight.has(login)) return undefined
-  const key = avatarKey(login)
-  const now = await $.clock.now()
-  const cached = fromCache(
-    (await $.store.get(key)) as AvatarEntry | undefined,
-    url,
-    now
-  )
-  if (!cached.fetch) return avatarDataUri(cached.data)
-  inFlight.add(login)
-  try {
-    const r = await $.process
-      .run([...AVATAR_FETCH, url], { timeoutMs: 10000 })
-      .catch(() => undefined)
-    const data = r?.exitCode === 0 ? photoBase64(r.stdout) : undefined
-    // a failed refetch keeps the stale photo, dated so it is tried again after RETRY_MS
-    const entry: AvatarEntry = data
-      ? { url, data, at: now }
-      : cached.data
-        ? { url, data: cached.data, at: now - FRESH_MS + RETRY_MS }
-        : { url, at: now }
-    await $.store.set(key, entry)
-    if (data) await pruneAvatars($)
-    return avatarDataUri(entry.data)
-  } finally {
-    inFlight.delete(login)
-  }
-}
-// each drawn row's assignee photo, loaded into `avatars` for the rows to draw; a login with no
-// photo yet (no URL, pending, no network) keeps its initials and is tried again on the next call
-const warmAvatars = async ($: EngineInterface) => {
-  const rows = [
-    ...(await read($, claimed)).flatMap(w => (w.detail ? [w.detail] : [])),
-    ...(await read($, mentioned)),
-  ]
-  const have = await read($, avatars)
-  const want = new Map<string, string>()
-  for (const m of rows) {
-    const login = m.assignees[0]
-    const url = login ? m.avatars?.[login] : undefined
-    if (login && url && !have[login]) want.set(login, url)
-  }
-  for (const [login, url] of want) {
-    const photo = await loadAvatar($, login, url).catch(() => undefined)
-    if (photo) await update($, avatars, all => ({ ...all, [login]: photo }))
-  }
-}
-const warmLater = ($: EngineInterface) =>
-  $.clock.after(0, () => warmAvatars($).catch(() => undefined))
-
 // a claimed row wins over a mentioned row for the same item
 const isClaimed = (m: MentionedItem, list: WorkItem[]) =>
   list.some(
@@ -318,6 +225,60 @@ const isClaimed = (m: MentionedItem, list: WorkItem[]) =>
         w.item_id === m.itemId)
   )
 
+// start_work records the claim, finish_work drops it; register names each tool in full
+const startWork: Hook<'tool.call'> = async ($, e, next) => {
+  const ran = await next(e)
+  const server = serverOf(e.tool)
+  const raw = e as unknown as Raw
+  if (ran.deny !== undefined || ran.isError || typeof raw.number !== 'number')
+    return ran
+  const item: WorkItem = {
+    number: raw.number,
+    repo: str(raw.repo),
+    project_id: str(raw.project_id),
+    item_id: str(raw.item_id),
+    server,
+    title: titleFrom(ran.text, raw.number),
+    startedAt: await $.clock.now(),
+  }
+  try {
+    const home = await homeOf($)
+    const repo = await originRepo($)
+    const inRepo = (item.repo ?? repo ?? undefined)?.toLowerCase()
+    item.detail = await lookUpClaim($, home, item, inRepo)
+    if (item.detail) item.title = item.detail.title || item.title
+  } catch {
+    // no snapshot: the minimal row
+  }
+  await update($, claimed, list => [
+    ...list.filter(w => keyOf(w) !== keyOf(item)),
+    item,
+  ])
+  await showStatus($)
+
+  return ran
+}
+const finishWork: Hook<'tool.call'> = async ($, e, next) => {
+  const ran = await next(e)
+  const server = serverOf(e.tool)
+  const raw = e as unknown as Raw
+  if (ran.deny !== undefined || ran.isError || typeof raw.number !== 'number')
+    return ran
+  // match on number (and repo when given): finish may omit the project the start named
+  const repo = str(raw.repo)
+  await update($, claimed, list =>
+    list.filter(
+      w =>
+        (w.server ?? DEFAULT_SERVER) !== server ||
+        w.number !== raw.number ||
+        (repo !== undefined && w.repo !== undefined && w.repo !== repo)
+    )
+  )
+  await showStatus($)
+
+  return ran
+}
+
 export const register: Register = on => {
   let blockedFor = '' // the claimed set the Stop guard last sent back
   let home: string | undefined
@@ -327,10 +288,7 @@ export const register: Register = on => {
   on('prompt.submit', async ($, e, next) => {
     $.clock.after(0, () => refreshTheme($).catch(() => undefined))
     // off the prompt path: a bare row's lookup never delays the prompt
-    $.clock.after(0, async () => {
-      await fillClaimed($, home, repo).catch(() => undefined)
-      await warmAvatars($).catch(() => undefined)
-    })
+    $.clock.after(0, () => fillClaimed($, home, repo).catch(() => undefined))
     let lines: string[] = []
     let found: MentionedItem[] = []
     try {
@@ -353,81 +311,18 @@ export const register: Register = on => {
     }
     if (lines.length === 0) return next(e)
     await update($, mentioned, () => found)
-    warmLater($)
 
     return next({ ...e, context: [...(e.context ?? []), lines.join('\n')] })
   })
 
-  for (const server of SERVERS) {
-    on(
-      'tool.call',
-      { tool: `mcp__${server}__start_work` },
-      async ($, e, next) => {
-        const ran = await next(e)
-        const raw = e as unknown as Raw
-        if (
-          ran.deny !== undefined ||
-          ran.isError ||
-          typeof raw.number !== 'number'
-        )
-          return ran
-        const item: WorkItem = {
-          number: raw.number,
-          repo: str(raw.repo),
-          project_id: str(raw.project_id),
-          item_id: str(raw.item_id),
-          server,
-          title: titleFrom(ran.text, raw.number),
-          startedAt: await $.clock.now(),
-        }
-        try {
-          home ??= await homeOf($)
-          if (repo === undefined) repo = await originRepo($)
-          const inRepo = (item.repo ?? repo ?? undefined)?.toLowerCase()
-          item.detail = await lookUpClaim($, home, item, inRepo)
-          if (item.detail) item.title = item.detail.title || item.title
-        } catch {
-          // no snapshot: the minimal row
-        }
-        await update($, claimed, list => [
-          ...list.filter(w => keyOf(w) !== keyOf(item)),
-          item,
-        ])
-        warmLater($)
-        await showStatus($)
-
-        return ran
-      }
-    )
-
-    on(
-      'tool.call',
-      { tool: `mcp__${server}__finish_work` },
-      async ($, e, next) => {
-        const ran = await next(e)
-        const raw = e as unknown as Raw
-        if (
-          ran.deny !== undefined ||
-          ran.isError ||
-          typeof raw.number !== 'number'
-        )
-          return ran
-        // match on number (and repo when given): finish may omit the project the start named
-        const repo = str(raw.repo)
-        await update($, claimed, list =>
-          list.filter(
-            w =>
-              (w.server ?? DEFAULT_SERVER) !== server ||
-              w.number !== raw.number ||
-              (repo !== undefined && w.repo !== undefined && w.repo !== repo)
-          )
-        )
-        await showStatus($)
-
-        return ran
-      }
-    )
-  }
+  on('tool.call', { tool: 'mcp__gitsu__start_work' }, startWork)
+  on('tool.call', { tool: 'mcp__gitsu-dev__start_work' }, startWork)
+  on('tool.call', { tool: 'mcp__gitsu-mcp__start_work' }, startWork)
+  on('tool.call', { tool: 'mcp__gitsu-mcp-dev__start_work' }, startWork)
+  on('tool.call', { tool: 'mcp__gitsu__finish_work' }, finishWork)
+  on('tool.call', { tool: 'mcp__gitsu-dev__finish_work' }, finishWork)
+  on('tool.call', { tool: 'mcp__gitsu-mcp__finish_work' }, finishWork)
+  on('tool.call', { tool: 'mcp__gitsu-mcp-dev__finish_work' }, finishWork)
 
   on('classic.Stop', async ($, e, next) => {
     const result = await next(e)
@@ -455,8 +350,6 @@ export const register: Register = on => {
       await fillClaimed($, home, repo).catch(() => undefined)
       if ((await read($, claimed)).length > 0) await update($, tick, n => n + 1)
       await showStatus($)
-      // off the tick: a slow or blocked photo fetch never holds up the status line
-      warmLater($)
     })
     await refreshTheme($).catch(() => undefined)
     await showStatus($)
@@ -486,7 +379,6 @@ export const register: Register = on => {
       .slice(0, 5)
     await read($, tick)
     const dark = await read($, isDark)
-    const photos = await read($, avatars)
     if (e.props.hasSurvey || (shown.length === 0 && mentions.length === 0))
       return next(e)
     const t = $.ui.resolve(e)
@@ -504,34 +396,9 @@ export const register: Register = on => {
       isDev: boolean
     }) => {
       const url = `${o.isDev ? 'gitsu-dev' : 'gitsu'}://item/${o.projectId}/${o.itemId}`
-      if (!o.isDev) {
-        if (!ok(await $.process.run(['open', url]).catch(() => undefined)))
-          $.ui.toast('Could not open Gitsu')
-        return
-      }
-      // the dev build is a bare binary macOS has no scheme for: a second instance hands the link
-      // to the running one through the single-instance plugin, then exits
-      const pid = (
-        await $.process
-          .run(['pgrep', '-n', '-f', '/debug/gitsu$'])
-          .catch(() => undefined)
-      )?.stdout.trim()
-      const bin =
-        pid && /^\d+$/.test(pid)
-          ? (
-              await $.process
-                .run(['ps', '-o', 'comm=', '-p', pid])
-                .catch(() => undefined)
-            )?.stdout.trim()
-          : undefined
-      if (!bin) return $.ui.toast('Gitsu (dev) is not running')
-      if (
-        !ok(
-          await $.process
-            .run([bin, url], { timeoutMs: 10000 })
-            .catch(() => undefined)
-        )
-      )
+      // the dev build is a bare binary with no URL scheme macOS knows
+      if (o.isDev) return $.ui.toast('Dev items cannot be opened from the band')
+      if (!ok(await $.process.run(['open', url]).catch(() => undefined)))
         $.ui.toast('Could not open Gitsu')
     }
 
@@ -617,13 +484,7 @@ export const register: Register = on => {
       tail: JSX.Element[]
     ) => {
       const login = m.assignees[0]
-      const chips = chipsSvg(
-        m.labels,
-        m.labelColors ?? {},
-        login,
-        dark,
-        login ? photos[login] : undefined
-      )
+      const chips = chipsSvg(m.labels, m.labelColors ?? {}, login, dark)
 
       return (
         <Box key={key} flexDirection="row" alignItems="center" gap={1}>
